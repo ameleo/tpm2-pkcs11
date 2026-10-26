@@ -271,6 +271,7 @@ class PKCS11RSAPrivateKey(PKCS11PrivateKey):
 
     def genmechs(self, tpm):
         privmech = PKCS11RSAPublicKey.rsa_gen_mechs_common(tpm)
+        privmech.append(CKM_TPM2_CERTIFY)
         self.update({CKA_ALLOWED_MECHANISMS: privmech})
 
 class PKCS11ECPrivateKey(PKCS11PrivateKey):
@@ -288,6 +289,7 @@ class PKCS11ECPrivateKey(PKCS11PrivateKey):
 
     def genmechs(self, tpm):
         privmech = PKCS11ECPublicKey.ecc_gen_mechs_common(tpm)
+        privmech.append(CKM_TPM2_CERTIFY)
         self.update({CKA_ALLOWED_MECHANISMS: privmech})
 
 class PKCS11SecretKey(PKCS11Key):

@@ -30,4 +30,5 @@ as the cryptographic token.
 # Advanced Knowledge
 * [Architecture](/docs/ARCHITECTURE.md) - Internal Overview
 * [DB Upgrades](/docs/DB_UPGRADE.md) - What happens on a DB Version Upgrade
+* [Vendor Mechanisms](/docs/VENDOR_MECHANISMS.md) - TPM operations through vendor mechanisms, such as TPM2_Certify
 * [Release Process](/docs/RELEASE.md) - How releases are conducted

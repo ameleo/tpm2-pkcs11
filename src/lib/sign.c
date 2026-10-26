@@ -4,6 +4,8 @@
 #include <assert.h>
 #include <stdlib.h>
 
+#include <tss2/tss2_mu.h>
+
 #include <openssl/ec.h>
 #include <openssl/ecdsa.h>
 #include <openssl/evp.h>
@@ -23,9 +25,23 @@
 #include "token.h"
 #include "tpm.h"
 
+/*
+ * State of a CKM_TPM2_CERTIFY operation: the signing key is loaded at C_SignInit,
+ * so that a bad key is reported there, and released when the operation ends.
+ */
+typedef struct certify_opdata certify_opdata;
+struct certify_opdata {
+    tpm_ctx *tctx;
+    CK_FLAGS flags;
+    uint32_t signer;
+    twist signer_auth;
+    TPMT_SIG_SCHEME scheme;
+};
+
 typedef struct sign_opdata sign_opdata;
 struct sign_opdata {
     CK_MECHANISM mech;
+    certify_opdata *certify;
     bool do_hash;
     twist buffer;
     digest_op_data *digest_opdata;
@@ -93,7 +109,21 @@ static sign_opdata *sign_opdata_new(operation op, mdetail *mdtl, CK_MECHANISM_PT
     return opdata;
 }
 
+static void certify_opdata_free(certify_opdata **opdata) {
+
+    if (!*opdata) {
+        return;
+    }
+
+    tpm_certify_signer_unload((*opdata)->tctx, (*opdata)->flags, &(*opdata)->signer);
+    twist_free((*opdata)->signer_auth);
+    free(*opdata);
+    *opdata = NULL;
+}
+
 static void sign_opdata_free(sign_opdata **opdata) {
+    certify_opdata_free(&(*opdata)->certify);
+
     digest_op_data_free(&(*opdata)->digest_opdata);
 
     if (*opdata && !(*opdata)->do_hash) {
@@ -151,6 +181,150 @@ static CK_RV update_pss_sig_state(token *tok, tobject *tobj) {
     return rv;
 }
 
+/*
+ * CKM_TPM2_CERTIFY: hKey is the object to certify (the objectHandle of
+ * TPM2_Certify), the mechanism parameter names the signing key (signHandle),
+ * which is not a token object. The parameter was validated by mech_validate().
+ */
+static CK_RV certify_init(session_ctx *ctx, token *tok, tobject *tobj, CK_MECHANISM_PTR mechanism) {
+
+    CK_TPM2_CERTIFY_PARAMS_PTR params = mechanism->pParameter;
+
+    certify_opdata *certify = calloc(1, sizeof(*certify));
+    if (!certify) {
+        LOGE("oom");
+        return CKR_HOST_MEMORY;
+    }
+
+    certify->tctx = tok->tctx;
+    certify->flags = params->flags;
+    certify->signer = ESYS_TR_NONE;
+    certify->scheme.scheme = TPM2_ALG_NULL;
+
+    CK_RV rv = CKR_HOST_MEMORY;
+    sign_opdata *opdata = NULL;
+    twist signer = NULL;
+
+    if (params->ulInSchemeLen) {
+        size_t offset = 0;
+        TSS2_RC rval = Tss2_MU_TPMT_SIG_SCHEME_Unmarshal(params->pInScheme,
+                params->ulInSchemeLen, &offset, &certify->scheme);
+        if (rval != TSS2_RC_SUCCESS || offset != params->ulInSchemeLen) {
+            LOGE("inScheme is not a marshalled TPMT_SIG_SCHEME");
+            rv = CKR_MECHANISM_PARAM_INVALID;
+            goto error;
+        }
+    }
+
+    if (params->ulSignerAuthLen) {
+        certify->signer_auth = twistbin_new(params->pSignerAuth, params->ulSignerAuthLen);
+        if (!certify->signer_auth) {
+            LOGE("oom");
+            goto error;
+        }
+    }
+
+    signer = twistbin_new(params->pSigner, params->ulSignerLen);
+    if (!signer) {
+        LOGE("oom");
+        goto error;
+    }
+
+    rv = tpm_certify_signer_load(tok->tctx, params->flags, signer, &certify->signer);
+    twist_free(signer);
+    if (rv != CKR_OK) {
+        goto error;
+    }
+
+    opdata = calloc(1, sizeof(*opdata));
+    if (!opdata) {
+        LOGE("oom");
+        rv = CKR_HOST_MEMORY;
+        goto error;
+    }
+
+    /* the parameters belong to the caller, keep only our copies */
+    opdata->mech.mechanism = mechanism->mechanism;
+    opdata->certify = certify;
+
+    session_ctx_opdata_set(ctx, operation_sign, tobj, opdata, (opdata_free_fn)sign_opdata_free);
+
+    return CKR_OK;
+
+error:
+    certify_opdata_free(&certify);
+    return rv;
+}
+
+/*
+ * Ends a CKM_TPM2_CERTIFY operation, which a single C_Sign call performs.
+ */
+static void certify_end(session_ctx *ctx, tobject *tobj, CK_RV *rv) {
+
+    tobj->is_authenticated = false;
+    CK_RV tmp_rv = tobject_user_decrement(tobj);
+    if (tmp_rv != CKR_OK && *rv == CKR_OK) {
+        *rv = tmp_rv;
+    }
+
+    session_ctx_opdata_clear(ctx);
+}
+
+static CK_RV certify_oneshot(session_ctx *ctx, sign_opdata *opdata, CK_BYTE_PTR data, CK_ULONG data_len,
+        CK_BYTE_PTR signature, CK_ULONG_PTR signature_len) {
+
+    tobject *tobj = session_ctx_opdata_get_tobject(ctx);
+    assert(tobj);
+
+    CK_RV rv = CKR_ARGUMENTS_BAD;
+    if (!signature_len || (data_len && !data)) {
+        goto out;
+    }
+
+    rv = session_ctx_tobject_authenticated(ctx);
+    if (rv != CKR_OK) {
+        goto out;
+    }
+
+    /* an upper bound, like for the other mechanisms the output size is not known in advance */
+    CK_ULONG max_len = sizeof(TPM2B_ATTEST) + sizeof(TPMT_SIGNATURE);
+    if (!signature) {
+        *signature_len = max_len;
+        return CKR_OK;
+    }
+
+    if (*signature_len < max_len) {
+        *signature_len = max_len;
+        return CKR_BUFFER_TOO_SMALL;
+    }
+
+    certify_opdata *certify = opdata->certify;
+    token *tok = session_ctx_get_token(ctx);
+    assert(tok);
+
+    rv = tpm_certify(tok->tctx, tobj, certify->signer, certify->signer_auth,
+            &certify->scheme, data, data_len, signature, signature_len);
+
+out:
+    certify_end(ctx, tobj, &rv);
+    return rv;
+}
+
+/*
+ * CKM_TPM2_CERTIFY is single-part: like any error, refusing C_SignUpdate and
+ * C_SignFinal terminates the operation.
+ */
+static CK_RV certify_multipart(session_ctx *ctx) {
+
+    LOGE("CKM_TPM2_CERTIFY is a single-part mechanism, use C_Sign");
+
+    CK_RV rv = CKR_FUNCTION_FAILED;
+    tobject *tobj = session_ctx_opdata_get_tobject(ctx);
+    assert(tobj);
+    certify_end(ctx, tobj, &rv);
+    return rv;
+}
+
 static CK_RV common_init(operation op, session_ctx *ctx, CK_MECHANISM_PTR mechanism, CK_OBJECT_HANDLE key) {
 
     check_pointer(mechanism);
@@ -176,6 +350,16 @@ static CK_RV common_init(operation op, session_ctx *ctx, CK_MECHANISM_PTR mechan
 
     rv = mech_validate(tok->mdtl, mechanism, tobj->attrs);
     if (rv != CKR_OK) {
+        return rv;
+    }
+
+    if (mechanism->mechanism == CKM_TPM2_CERTIFY) {
+        rv = (op == operation_sign) ?
+                certify_init(ctx, tok, tobj, mechanism) :
+                CKR_MECHANISM_INVALID;
+        if (rv != CKR_OK) {
+            tobject_user_decrement(tobj);
+        }
         return rv;
     }
 
@@ -304,7 +488,18 @@ CK_RV sign_init(session_ctx *ctx, CK_MECHANISM *mechanism, CK_OBJECT_HANDLE key)
     return common_init(operation_sign, ctx, mechanism, key);
 }
 
+static bool is_certify(session_ctx *ctx, sign_opdata **opdata) {
+
+    CK_RV rv = session_ctx_opdata_get(ctx, operation_sign, opdata);
+    return rv == CKR_OK && (*opdata)->certify;
+}
+
 CK_RV sign_update(session_ctx *ctx, CK_BYTE_PTR part, CK_ULONG part_len) {
+
+    sign_opdata *opdata = NULL;
+    if (is_certify(ctx, &opdata)) {
+        return certify_multipart(ctx);
+    }
 
     return common_update(operation_sign, ctx, part, part_len);
 }
@@ -323,6 +518,10 @@ CK_RV sign_final_ex(session_ctx *ctx, CK_BYTE_PTR signature, CK_ULONG_PTR signat
         return rv;
     }
     assert(opdata);
+
+    if (opdata->certify) {
+        return certify_multipart(ctx);
+    }
 
     rv = session_ctx_tobject_authenticated(ctx);
     if (rv != CKR_OK) {
@@ -526,6 +725,11 @@ session_out:
 }
 
 CK_RV sign(session_ctx *ctx, CK_BYTE_PTR data, CK_ULONG data_len, CK_BYTE_PTR signature, CK_ULONG *signature_len) {
+
+    sign_opdata *opdata = NULL;
+    if (is_certify(ctx, &opdata)) {
+        return certify_oneshot(ctx, opdata, data, data_len, signature, signature_len);
+    }
 
     CK_RV rv = sign_update(ctx, data, data_len);
     if (rv != CKR_OK) {

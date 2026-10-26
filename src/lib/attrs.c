@@ -693,11 +693,13 @@ static CK_RV rsa_gen_mechs(attr_list *new_pub_attrs, attr_list *new_priv_attrs) 
         CKM_SHA256_RSA_PKCS_PSS,
         CKM_SHA384_RSA_PKCS_PSS,
         CKM_SHA512_RSA_PKCS_PSS,
+        /* private key only, keep last */
+        CKM_TPM2_CERTIFY,
     };
 
     if (new_pub_attrs) {
         bool r = attr_list_add_int_seq(new_pub_attrs, CKA_ALLOWED_MECHANISMS,
-                (CK_BYTE_PTR)&t, sizeof(t));
+                (CK_BYTE_PTR)&t, sizeof(t) - sizeof(t[0]));
         goto_error_false(r);
     }
 
@@ -988,10 +990,12 @@ static CK_RV ecc_gen_mechs(attr_list *new_pub_attrs, attr_list *new_priv_attrs) 
         CKM_ECDSA_SHA384,
         CKM_ECDSA_SHA512,
         CKM_ECDH1_DERIVE,
+        /* private key only, keep last */
+        CKM_TPM2_CERTIFY,
     };
 
     bool r = attr_list_add_int_seq(new_pub_attrs, CKA_ALLOWED_MECHANISMS,
-            (CK_BYTE_PTR)&t, sizeof(t));
+            (CK_BYTE_PTR)&t, sizeof(t) - sizeof(t[0]));
     goto_error_false(r);
 
     r = attr_list_add_int_seq(new_priv_attrs, CKA_ALLOWED_MECHANISMS,

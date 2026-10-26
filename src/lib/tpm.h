@@ -102,6 +102,38 @@ WEAK bool tpm_deserialize_handle(tpm_ctx *ctx, twist handle_blob, uint32_t *hand
 bool tpm_contextload_handle(tpm_ctx *ctx, twist handle_blob, uint32_t *handle);
 
 CK_RV tpm_sign(tpm_op_data *opdata, CK_BYTE_PTR data, CK_ULONG datalen, CK_BYTE_PTR sig, CK_ULONG_PTR siglen);
+
+/**
+ * Loads the signing key of a CKM_TPM2_CERTIFY operation.
+ * @param ctx
+ *  The tpm context.
+ * @param flags
+ *  CKF_TPM2_SIGNER_CONTEXT: blob is a marshalled TPMS_CONTEXT of a transient object.
+ *  CKF_TPM2_SIGNER_ESYS_TR: blob is a serialized ESYS_TR of a persistent object.
+ * @param blob
+ *  The signing key.
+ * @param handle
+ *  The ESYS_TR of the signing key, release it with tpm_certify_signer_unload().
+ * @return
+ *  CKR_OK on success, CKR_MECHANISM_PARAM_INVALID if the TPM refuses the key.
+ */
+CK_RV tpm_certify_signer_load(tpm_ctx *ctx, CK_FLAGS flags, twist blob, uint32_t *handle);
+
+/**
+ * Flushes a signing key loaded from a context, forgets about a persistent one.
+ */
+void tpm_certify_signer_unload(tpm_ctx *ctx, CK_FLAGS flags, uint32_t *handle);
+
+/**
+ * TPM2_Certify of a loaded token object by a signing key.
+ * @param data
+ *  The qualifyingData, at most the size of the TPM2B_DATA buffer.
+ * @param out
+ *  The marshalled TPM2B_ATTEST followed by the marshalled TPMT_SIGNATURE.
+ */
+CK_RV tpm_certify(tpm_ctx *ctx, tobject *tobj, uint32_t signer, twist signer_auth,
+        TPMT_SIG_SCHEME *scheme, CK_BYTE_PTR data, CK_ULONG datalen,
+        CK_BYTE_PTR out, CK_ULONG_PTR outlen);
 CK_RV tpm_verify(tpm_op_data *opdata, CK_BYTE_PTR data, CK_ULONG datalen, CK_BYTE_PTR sig, CK_ULONG siglen);
 
 CK_RV tpm_rsa_pkcs_get_opdata(mdetail *m, tpm_ctx *tctx, CK_MECHANISM_PTR mech, tobject *tobj, tpm_op_data **opdata);

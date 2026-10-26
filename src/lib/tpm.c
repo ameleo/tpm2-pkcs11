@@ -1492,6 +1492,157 @@ CK_RV tpm_sign(tpm_op_data *opdata, CK_BYTE_PTR data, CK_ULONG datalen, CK_BYTE_
     return rv;
 }
 
+CK_RV tpm_certify_signer_load(tpm_ctx *ctx, CK_FLAGS flags, twist blob, uint32_t *handle) {
+    assert(ctx);
+    assert(blob);
+    assert(handle);
+
+    size_t len = twist_len(blob);
+    size_t offset = 0;
+    TSS2_RC rval;
+
+    if (flags == CKF_TPM2_SIGNER_CONTEXT) {
+        TPMS_CONTEXT context = { 0 };
+        rval = Tss2_MU_TPMS_CONTEXT_Unmarshal((uint8_t *)blob, len, &offset, &context);
+        if (rval != TSS2_RC_SUCCESS || offset != len) {
+            LOGE("Signer is not a marshalled TPMS_CONTEXT");
+            return CKR_MECHANISM_PARAM_INVALID;
+        }
+
+        /* the context of an object, not of a session */
+        if ((context.savedHandle >> TPM2_HR_SHIFT) != TPM2_HT_TRANSIENT) {
+            LOGE("Signer context is not the context of an object, got saved handle: 0x%x",
+                    context.savedHandle);
+            return CKR_MECHANISM_PARAM_INVALID;
+        }
+
+        rval = Esys_ContextLoad(ctx->esys_ctx, &context, handle);
+        if (rval != TSS2_RC_SUCCESS) {
+            LOGE("Esys_ContextLoad: %s", Tss2_RC_Decode(rval));
+            return CKR_MECHANISM_PARAM_INVALID;
+        }
+
+        return CKR_OK;
+    }
+
+    if (flags == CKF_TPM2_SIGNER_ESYS_TR) {
+        rval = Esys_TR_Deserialize(ctx->esys_ctx, (uint8_t *)blob, len, handle);
+        if (rval != TSS2_RC_SUCCESS) {
+            LOGE("Esys_TR_Deserialize: %s", Tss2_RC_Decode(rval));
+            return CKR_MECHANISM_PARAM_INVALID;
+        }
+
+        TPM2_HANDLE tpm_handle = 0;
+        rval = Esys_TR_GetTpmHandle(ctx->esys_ctx, *handle, &tpm_handle);
+        if (rval != TSS2_RC_SUCCESS
+                || (tpm_handle >> TPM2_HR_SHIFT) != TPM2_HT_PERSISTENT) {
+            LOGE("Signer is not a persistent object, got handle: 0x%x", tpm_handle);
+            rval = Esys_TR_Close(ctx->esys_ctx, handle);
+            if (rval != TSS2_RC_SUCCESS) {
+                LOGW("Esys_TR_Close: %s", Tss2_RC_Decode(rval));
+            }
+            return CKR_MECHANISM_PARAM_INVALID;
+        }
+
+        return CKR_OK;
+    }
+
+    LOGE("Unknown signer flags, got: 0x%lx", flags);
+    return CKR_MECHANISM_PARAM_INVALID;
+}
+
+void tpm_certify_signer_unload(tpm_ctx *ctx, CK_FLAGS flags, uint32_t *handle) {
+    assert(ctx);
+    assert(handle);
+
+    if (*handle == ESYS_TR_NONE) {
+        return;
+    }
+
+    /* flush what we loaded, only forget about persistent objects */
+    TSS2_RC rval = (flags == CKF_TPM2_SIGNER_CONTEXT) ?
+            Esys_FlushContext(ctx->esys_ctx, *handle) :
+            Esys_TR_Close(ctx->esys_ctx, handle);
+    if (rval != TSS2_RC_SUCCESS) {
+        LOGW("Could not release the signer: %s", Tss2_RC_Decode(rval));
+    }
+
+    *handle = ESYS_TR_NONE;
+}
+
+CK_RV tpm_certify(tpm_ctx *ctx, tobject *tobj, uint32_t signer, twist signer_auth,
+        TPMT_SIG_SCHEME *scheme, CK_BYTE_PTR data, CK_ULONG datalen,
+        CK_BYTE_PTR out, CK_ULONG_PTR outlen) {
+    assert(ctx);
+    assert(tobj);
+    assert(scheme);
+    assert(outlen);
+
+    TPM2B_DATA qualifying = TPM2B_EMPTY_INIT;
+    if (datalen > sizeof(qualifying.buffer)) {
+        return CKR_DATA_LEN_RANGE;
+    }
+    if (datalen) {
+        memcpy(qualifying.buffer, data, datalen);
+    }
+    qualifying.size = datalen;
+
+    bool result = set_esys_auth(ctx->esys_ctx, tobj->tpm_esys_tr, tobj->unsealed_auth);
+    if (!result) {
+        return CKR_GENERAL_ERROR;
+    }
+
+    result = set_esys_auth(ctx->esys_ctx, signer, signer_auth);
+    if (!result) {
+        return CKR_GENERAL_ERROR;
+    }
+
+    /*
+     * The object's auth value goes through the salted HMAC session of the token,
+     * the signer's through a password session.
+     */
+    TPM2B_ATTEST *certify_info = NULL;
+    TPMT_SIGNATURE *signature = NULL;
+    TSS2_RC rval = Esys_Certify(
+            ctx->esys_ctx,
+            tobj->tpm_esys_tr,
+            signer,
+            ctx->hmac_session,
+            ESYS_TR_PASSWORD,
+            ESYS_TR_NONE,
+            &qualifying,
+            scheme,
+            &certify_info,
+            &signature);
+    if (rval != TSS2_RC_SUCCESS) {
+        LOGE("Esys_Certify: %s", Tss2_RC_Decode(rval));
+        return rval == TPM2_RC_LOCKOUT ?
+                CKR_PIN_LOCKED : CKR_FUNCTION_FAILED;
+    }
+
+    CK_RV rv = CKR_GENERAL_ERROR;
+    size_t offset = 0;
+    rval = Tss2_MU_TPM2B_ATTEST_Marshal(certify_info, out, *outlen, &offset);
+    if (rval == TSS2_RC_SUCCESS) {
+        rval = Tss2_MU_TPMT_SIGNATURE_Marshal(signature, out, *outlen, &offset);
+    }
+    if (rval != TSS2_RC_SUCCESS) {
+        LOGE("Could not marshal the attestation: %s", Tss2_RC_Decode(rval));
+        rv = (rval == TSS2_MU_RC_INSUFFICIENT_BUFFER) ?
+                CKR_BUFFER_TOO_SMALL : CKR_GENERAL_ERROR;
+        goto out;
+    }
+
+    *outlen = offset;
+    rv = CKR_OK;
+
+out:
+    Esys_Free(certify_info);
+    Esys_Free(signature);
+
+    return rv;
+}
+
 CK_RV tpm_verify(tpm_op_data *opdata, CK_BYTE_PTR data, CK_ULONG datalen, CK_BYTE_PTR sig, CK_ULONG siglen) {
     assert(opdata);
 
@@ -4045,6 +4196,17 @@ CK_RV tpm2_getmechanisms(tpm_ctx *ctx, CK_MECHANISM_TYPE *mechanism_list, CK_ULO
         if_add_mech(algs, TPM2_ALG_SHA256, CKM_SHA256_HMAC);
         if_add_mech(algs, TPM2_ALG_SHA384, CKM_SHA384_HMAC);
         if_add_mech(algs, TPM2_ALG_SHA512, CKM_SHA512_HMAC);
+    }
+
+    /* Vendor: TPM2_Certify */
+    bool has_certify = false;
+    TSS2_RC rval = tpm_supports_cc(ctx, TPM2_CC_Certify, &has_certify);
+    if (rval != TSS2_RC_SUCCESS) {
+        rv = CKR_GENERAL_ERROR;
+        goto out;
+    }
+    if (has_certify) {
+        add_mech(CKM_TPM2_CERTIFY);
     }
 
 out:

@@ -37,6 +37,7 @@ enum mechanism_flags {
     mf_force_synthetic = 1 << 12,
     mf_hmac          = 1 << 13,
     mf_derive        = 1 << 14,
+    mf_tpm2_certify  = 1 << 15,
 };
 
 typedef struct mdetail_entry mdetail_entry;
@@ -110,6 +111,7 @@ static CK_RV ecdsa_validator(mdetail *m, CK_MECHANISM_PTR mech, attr_list *attrs
 static CK_RV ecdh1_validator(mdetail *m, CK_MECHANISM_PTR mech, attr_list *attrs);
 static CK_RV hash_validator(mdetail *m, CK_MECHANISM_PTR mech, attr_list *attrs);
 static CK_RV hmac_validator(mdetail *m, CK_MECHANISM_PTR mech, attr_list *attrs);
+static CK_RV tpm2_certify_validator(mdetail *m, CK_MECHANISM_PTR mech, attr_list *attrs);
 static CK_RV rsa_pkcs_synthesizer(mdetail *m, CK_MECHANISM_PTR mech, attr_list *attrs,
         CK_BYTE_PTR inbuf, CK_ULONG inlen,
         CK_BYTE_PTR outbuf, CK_ULONG_PTR outlen);
@@ -199,6 +201,9 @@ static const mdetail_entry _g_mechs_templ[] = {
     { .type = CKM_SHA256_HMAC, .flags = mf_sign|mf_verify|mf_hmac, .validator = hmac_validator, .get_tpm_opdata = tpm_hmac_sha256_get_opdata },
     { .type = CKM_SHA384_HMAC, .flags = mf_sign|mf_verify|mf_hmac, .validator = hmac_validator, .get_tpm_opdata = tpm_hmac_sha384_get_opdata },
     { .type = CKM_SHA512_HMAC, .flags = mf_sign|mf_verify|mf_hmac, .validator = hmac_validator, .get_tpm_opdata = tpm_hmac_sha512_get_opdata },
+
+    /* vendor */
+    { .type = CKM_TPM2_CERTIFY, .flags = mf_sign|mf_tpm2_certify, .validator = tpm2_certify_validator },
 };
 
 const rsa_detail _g_rsa_keysizes_templ [] = {
@@ -227,6 +232,43 @@ static mdetail_entry *mlookup(mdetail *details, CK_MECHANISM_TYPE t) {
     }
 
     return NULL;
+}
+
+static CK_RV tpm2_certify_validator(mdetail *m, CK_MECHANISM_PTR mech, attr_list *attrs) {
+    UNUSED(m);
+
+    if (!mech->pParameter || mech->ulParameterLen != sizeof(CK_TPM2_CERTIFY_PARAMS)) {
+        return CKR_MECHANISM_PARAM_INVALID;
+    }
+
+    CK_TPM2_CERTIFY_PARAMS_PTR params = mech->pParameter;
+    if (params->flags != CKF_TPM2_SIGNER_CONTEXT
+            && params->flags != CKF_TPM2_SIGNER_ESYS_TR) {
+        return CKR_MECHANISM_PARAM_INVALID;
+    }
+
+    if (!params->pSigner || !params->ulSignerLen) {
+        return CKR_MECHANISM_PARAM_INVALID;
+    }
+
+    /* the auth value of a TPM object is at most the size of a digest */
+    if (params->ulSignerAuthLen > sizeof(TPMU_HA)
+            || (params->ulSignerAuthLen && !params->pSignerAuth)) {
+        return CKR_MECHANISM_PARAM_INVALID;
+    }
+
+    if (params->ulInSchemeLen > sizeof(TPMT_SIG_SCHEME)
+            || (params->ulInSchemeLen && !params->pInScheme)) {
+        return CKR_MECHANISM_PARAM_INVALID;
+    }
+
+    /* only private keys are TPM objects with an auth value which the token holds */
+    CK_OBJECT_CLASS clazz = attr_list_get_CKA_CLASS(attrs, CK_OBJECT_CLASS_BAD);
+    if (clazz != CKO_PRIVATE_KEY) {
+        return CKR_KEY_TYPE_INCONSISTENT;
+    }
+
+    return CKR_OK;
 }
 
 static CK_RV mech_init(tpm_ctx *tctx, mdetail *m) {
@@ -1568,6 +1610,11 @@ CK_RV mech_get_info(mdetail *m, tpm_ctx *tctx,
 
     if (d->flags & mf_ecc) {
         return get_ecc_mechinfo(tctx, info);
+    }
+
+    if (d->flags & mf_tpm2_certify) {
+        /* any key the TPM can load, no key size applies */
+        return CKR_OK;
     }
 
     if (d->flags & mf_hmac) {

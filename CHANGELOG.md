@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 Starting with release 1.8.0, The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+### Added:
+- Vendor mechanism `CKM_TPM2_CERTIFY`: TPM2\_Certify of a private key of the token by a TPM signing key
+  which is not a token object, such as an attestation key. See [docs/VENDOR\_MECHANISMS.md](docs/VENDOR_MECHANISMS.md).
+  Fixes #280.
+- Installed header `tpm2-pkcs11/pkcs11-tpm2.h` with the vendor attributes and mechanisms.
+- `CKM_TPM2_CERTIFY` in the `CKA_ALLOWED_MECHANISMS` of new RSA and EC private keys.
+
 ## [1.10.1] - 2026-08-06
 ### Fixed:
 - Revert commit fab314 - "configure: detect --prefix when checking for P11_KIT"

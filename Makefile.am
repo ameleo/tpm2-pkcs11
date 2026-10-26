@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
-INCLUDE_DIRS    = -I$(srcdir)/src -I$(top_srcdir)/src/lib
+INCLUDE_DIRS    = -I$(srcdir)/src -I$(top_srcdir)/src/lib -I$(top_srcdir)/include
 ACLOCAL_AMFLAGS = -I m4 --install
 AM_CFLAGS       = $(INCLUDE_DIRS) $(EXTRA_CFLAGS) $(CODE_COVERAGE_CFLAGS) \
                   $(TSS2_ESYS_CFLAGS) $(TSS2_MU_CFLAGS) $(TSS2_TCTILDR_CFLAGS) \
@@ -50,6 +50,8 @@ DISTCLEANFILES = $(pkgconfig_DATA)
 ### PKCS#11 Library Definition ###
 libtpm2_pkcs11 = src/libtpm2_pkcs11.la
 pkgconfig_DATA += lib/tpm2-pkcs11.pc
+tpm2pkcs11includedir = $(includedir)/tpm2-pkcs11
+tpm2pkcs11include_HEADERS = include/tpm2-pkcs11/pkcs11-tpm2.h
 EXTRA_DIST += lib/tpm2-pkcs11.map
 
 if HAVE_LD_VERSION_SCRIPT
