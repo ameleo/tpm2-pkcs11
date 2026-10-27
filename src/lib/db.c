@@ -1401,7 +1401,8 @@ static CK_RV db_create_handler(char *path, size_t len, handler_idx index) {
 
     char *d = dirname(pathdup);
 
-    if (index == HANDLER_IDX_ENV || index == HANDLER_IDX_HOME) {
+    if (index == HANDLER_IDX_ENV || index == HANDLER_IDX_HOMEXDG
+            || index == HANDLER_IDX_HOME) {
 
         struct stat sb;
         int rc = stat(d, &sb);
@@ -1417,8 +1418,15 @@ static CK_RV db_create_handler(char *path, size_t len, handler_idx index) {
 
         rc = mkdir(d, S_IRWXU|S_IRWXG);
         if (rc) {
-            LOGE("Could not mkdir \"%s\", error: %s", d, strerror(errno));
-            rv = HANDLER_IDX_ENV ? CKR_GENERAL_ERROR : CKR_TOKEN_NOT_PRESENT;
+            /* the directory named by the environment must be usable, the
+             * others are only places to try */
+            if (index == HANDLER_IDX_ENV) {
+                LOGE("Could not mkdir \"%s\", error: %s", d, strerror(errno));
+                rv = CKR_GENERAL_ERROR;
+            } else {
+                LOGV("Could not mkdir \"%s\", error: %s", d, strerror(errno));
+                rv = CKR_TOKEN_NOT_PRESENT;
+            }
             goto out;
         }
 
@@ -1434,14 +1442,19 @@ static CK_RV db_create_handler(char *path, size_t len, handler_idx index) {
         if (!f) {
             /*
              * we don't care about errors, we just skip it, but if it's
-             * an access issue, we will let the user know via LOGW.
+             * an unexpected one, we will let the user know via LOGW.
              * */
-            if (errno != ENOENT) {
-                const char *msg = (errno == EPERM || errno == EACCES) ?
-                        "Error checking access to \"%s\", skipping. error: %s" :
-                        "\"%s\" exists, but no access, skipping. error: %s";
-                LOGW(msg, TPM2_PKCS11_STORE_DIR,
-                        strerror(errno));
+            if (errno == EPERM || errno == EACCES) {
+                /*
+                 * A system store kept from this user, as a store of root
+                 * only: the user's own store is used instead, which is no
+                 * reason for a warning.
+                 */
+                LOGV("No access to \"%s\", skipping. error: %s",
+                        TPM2_PKCS11_STORE_DIR, strerror(errno));
+            } else if (errno != ENOENT) {
+                LOGW("Error checking access to \"%s\", skipping. error: %s",
+                        TPM2_PKCS11_STORE_DIR, strerror(errno));
             }
             goto out;
         }
