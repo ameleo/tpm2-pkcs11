@@ -19,7 +19,10 @@ If the tss2-fapi library is configured, it will dynamically attempt to locate an
 superfluous errors and warnings. The library is built to ignore these errors, like:
   - <https://github.com/tpm2-software/tpm2-pkcs11/issues/655>
 
-You can take a few actions if you run into this issue:
+Setting `TPM2_PKCS11_BACKEND=esysdb` explicitly selects the SQLite3 backend alone: FAPI is then not started
+and its tokens are not listed, so none of these errors occur. Left unset, both backends are used as before.
+
+Otherwise, you can take a few actions if you run into this issue:
 1. Ignore them, and optionally disable FAPI error logging:
     - `export TSS2_LOG=fapi+NONE`
 

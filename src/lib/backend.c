@@ -46,7 +46,15 @@ CK_RV backend_init(void) {
         return CKR_GENERAL_ERROR;
     }
 
-    CK_RV rv = backend_fapi_init();
+    /*
+     * When esysdb is asked for by name, FAPI is not started: listing its
+     * tokens would only report, for a FAPI that was never provisioned,
+     * errors that are none of the caller's concern.
+     */
+    const char *env = getenv("TPM2_PKCS11_BACKEND");
+    bool esysdb_only = env && !strcasecmp(env, "esysdb");
+
+    CK_RV rv = esysdb_only ? CKR_FUNCTION_NOT_SUPPORTED : backend_fapi_init();
     if (rv) {
         static const char *msg = "FAPI backend was not initialized.";
         if (backend == backend_fapi) {
