@@ -448,6 +448,13 @@ void token_unlock(token *t) {
 
 CK_RV token_setpin(token *tok, CK_UTF8CHAR_PTR oldpin, CK_ULONG oldlen, CK_UTF8CHAR_PTR newpin, CK_ULONG newlen) {
 
+    /*
+     * The token has no protected authentication path, so a PIN is always
+     * passed in, an empty one as a buffer of length 0 (PKCS#11, C_SetPIN).
+     */
+    check_pointer(oldpin);
+    check_pointer(newpin);
+
     CK_RV rv = CKR_GENERAL_ERROR;
 
     /* pin data */
@@ -502,6 +509,12 @@ out:
 }
 
 CK_RV token_initpin(token *tok, CK_UTF8CHAR_PTR newpin, CK_ULONG newlen) {
+
+    /*
+     * A NULL PIN asks for the protected authentication path, which the token
+     * does not have (PKCS#11, C_InitPIN): an empty PIN is a buffer of length 0.
+     */
+    check_pointer(newpin);
 
     CK_RV rv = CKR_GENERAL_ERROR;
 
@@ -576,22 +589,32 @@ out:
     return rv;
 }
 
+CK_RV token_unseal_empty_user_pin(token *tok) {
+
+    if (tok->wrappingkey || !tok->config.empty_user_pin) {
+        return CKR_OK;
+    }
+
+    twist tpin = twistbin_new("", 0);
+    if (!tpin) {
+        return CKR_HOST_MEMORY;
+    }
+    CK_RV rv = backend_token_unseal_wrapping_key(tok, true, tpin);
+    twist_free(tpin);
+    if (rv != CKR_OK) {
+        LOGE("Error unsealing wrapping key");
+    }
+    return rv;
+}
+
 CK_RV token_load_object(token *tok, CK_OBJECT_HANDLE key, tobject **loaded_tobj) {
     CK_RV rv;
     tpm_ctx *tpm = tok->tctx;
 
     /* Unseal the wrapping key, if the user PIN is empty */
-    if (!tok->wrappingkey && tok->config.empty_user_pin) {
-        twist tpin = twistbin_new("", 0);
-        if (!tpin) {
-            return CKR_HOST_MEMORY;
-        }
-        rv = backend_token_unseal_wrapping_key(tok, true, tpin);
-        twist_free(tpin);
-        if (rv != CKR_OK) {
-            LOGE("Error unsealing wrapping key");
-            return rv;
-        }
+    rv = token_unseal_empty_user_pin(tok);
+    if (rv != CKR_OK) {
+        return rv;
     }
 
     rv = token_find_tobject(tok, key, loaded_tobj);

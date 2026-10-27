@@ -738,6 +738,124 @@ static void test_init_token(void **state) {
     assert_int_equal(rv, CKR_GENERAL_ERROR);
 }
 
+static void test_init_token_empty_user_pin(void **state) {
+    UNUSED(state);
+
+    CK_SLOT_ID slots[10];
+    CK_ULONG slot_cnt = ARRAY_LEN(slots);
+
+    CK_RV rv = C_GetSlotList (CK_TRUE, slots, &slot_cnt);
+    assert_int_equal(rv, CKR_OK);
+
+    bool found = false;
+    CK_SLOT_ID slot = 0;
+    CK_ULONG i;
+    for (i=0; i < slot_cnt; i++) {
+        CK_TOKEN_INFO info = { 0 };
+        rv = C_GetTokenInfo (slots[i], &info);
+        assert_int_equal(rv, CKR_OK);
+
+        if (!(info.flags & CKF_TOKEN_INITIALIZED)) {
+            found = true;
+            slot = slots[i];
+            break;
+        }
+    }
+    assert_int_equal(found, true);
+
+    unsigned char sopin[] = GOOD_SOPIN;
+    CK_BYTE label[32 + 1] = "emptyuserpin                    ";
+
+    rv = C_InitToken(slot, sopin, sizeof(sopin) - 1, label);
+    assert_int_equal(rv, CKR_OK);
+
+    CK_SESSION_HANDLE session = 0;
+    rv = C_OpenSession(slot, CKF_SERIAL_SESSION|CKF_RW_SESSION, NULL, NULL, &session);
+    assert_int_equal(rv, CKR_OK);
+
+    rv = C_Login(session, CKU_SO, sopin, sizeof(sopin) - 1);
+    assert_int_equal(rv, CKR_OK);
+
+    /* no protected authentication path: a NULL PIN is not an empty one */
+    rv = C_InitPIN(session, NULL, 0);
+    assert_int_equal(rv, CKR_ARGUMENTS_BAD);
+
+    CK_UTF8CHAR empty[1] = { 0 };
+    rv = C_InitPIN(session, empty, 0);
+    assert_int_equal(rv, CKR_OK);
+
+    rv = C_Logout(session);
+    assert_int_equal(rv, CKR_OK);
+
+    rv = C_CloseSession(session);
+    assert_int_equal(rv, CKR_OK);
+
+    /* the empty PIN must survive a new load of the store */
+    rv = C_Finalize(NULL);
+    assert_int_equal(rv, CKR_OK);
+
+    CK_C_INITIALIZE_ARGS args = {
+        .flags = CKF_OS_LOCKING_OK
+    };
+    rv = C_Initialize(&args);
+    assert_int_equal(rv, CKR_OK);
+
+    slot_cnt = ARRAY_LEN(slots);
+    rv = C_GetSlotList (CK_TRUE, slots, &slot_cnt);
+    assert_int_equal(rv, CKR_OK);
+
+    found = false;
+    for (i=0; i < slot_cnt; i++) {
+        CK_TOKEN_INFO info = { 0 };
+        rv = C_GetTokenInfo (slots[i], &info);
+        assert_int_equal(rv, CKR_OK);
+
+        if (!memcmp(info.label, label, sizeof(info.label))) {
+            assert_false(info.flags & CKF_LOGIN_REQUIRED);
+            found = true;
+            slot = slots[i];
+            break;
+        }
+    }
+    assert_int_equal(found, true);
+
+    /* a key is made and used without C_Login */
+    rv = C_OpenSession(slot, CKF_SERIAL_SESSION|CKF_RW_SESSION, NULL, NULL, &session);
+    assert_int_equal(rv, CKR_OK);
+
+    CK_ULONG bits = 2048;
+    CK_BBOOL ck_true = CK_TRUE;
+    CK_ATTRIBUTE pub[] = {
+        { CKA_TOKEN, &ck_true, sizeof(ck_true) },
+        { CKA_MODULUS_BITS, &bits, sizeof(bits) },
+        { CKA_VERIFY, &ck_true, sizeof(ck_true) },
+    };
+    CK_ATTRIBUTE priv[] = {
+        { CKA_TOKEN, &ck_true, sizeof(ck_true) },
+        { CKA_PRIVATE, &ck_true, sizeof(ck_true) },
+        { CKA_SIGN, &ck_true, sizeof(ck_true) },
+    };
+    CK_MECHANISM gen = { CKM_RSA_PKCS_KEY_PAIR_GEN, NULL, 0 };
+    CK_OBJECT_HANDLE hpub, hpriv;
+    rv = C_GenerateKeyPair(session, &gen, pub, ARRAY_LEN(pub), priv, ARRAY_LEN(priv),
+            &hpub, &hpriv);
+    assert_int_equal(rv, CKR_OK);
+
+    CK_MECHANISM mech = { CKM_SHA256_RSA_PKCS, NULL, 0 };
+    rv = C_SignInit(session, &mech, hpriv);
+    assert_int_equal(rv, CKR_OK);
+
+    CK_BYTE data[] = "data";
+    CK_BYTE sig[512];
+    CK_ULONG siglen = sizeof(sig);
+    rv = C_Sign(session, data, sizeof(data) - 1, sig, &siglen);
+    assert_int_equal(rv, CKR_OK);
+    assert_int_equal(siglen, 256);
+
+    rv = C_CloseSession(session);
+    assert_int_equal(rv, CKR_OK);
+}
+
 int main() {
 
     const struct CMUnitTest tests[] = {
@@ -797,6 +915,7 @@ int main() {
         /* These work on new tokens via slots and thus don't matter the order */
         cmocka_unit_test_setup_teardown(test_double_init_token,
                 test_setup_ro, test_teardown),
+        cmocka_unit_test(test_init_token_empty_user_pin),
         cmocka_unit_test(test_init_token),
     };
 

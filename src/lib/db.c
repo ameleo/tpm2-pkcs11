@@ -951,6 +951,12 @@ CK_RV db_update_token_config(token *tok) {
     rc = sqlite3_bind_int(stmt, 2, tok->id);
     gotobinderror(rc, "id");
 
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        LOGE("Could not execute stmt");
+        goto error;
+    }
+
     rv = CKR_OK;
 
 error:

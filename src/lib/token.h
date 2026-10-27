@@ -219,6 +219,17 @@ void token_unlock(token *t);
  */
 CK_RV token_load_object(token *tok, CK_OBJECT_HANDLE key, tobject **loaded_tobj);
 
+/**
+ * Unseals the wrapping key of a token whose user PIN is empty, so that the
+ * user's objects can be used and created without C_Login.
+ * @param tok
+ *  The token.
+ * @return
+ *   CKR_OK - the wrapping key is available, or the token has a user PIN.
+ *   Others like: CKR_GENERAL_ERROR and CKR_HOST_MEMORY
+ */
+CK_RV token_unseal_empty_user_pin(token *tok);
+
 CK_RV token_min_init(token *t);
 void token_reset(token *t);
 
