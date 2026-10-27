@@ -1493,7 +1493,8 @@ static CK_RV db_get_version(sqlite3 *db, unsigned *version) {
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        LOGW("Cannot prepare version query: %s\n", sqlite3_errmsg(global.db));
+        /* a store just created has no schema table yet: it is empty */
+        LOGV("Cannot prepare version query: %s\n", sqlite3_errmsg(global.db));
         *version = DB_EMPTY;
         return CKR_OK;
     }
