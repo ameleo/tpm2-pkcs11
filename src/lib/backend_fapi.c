@@ -6,7 +6,12 @@
 #endif
 #include <tss2/tss2_rc.h>
 
+#include <ctype.h>
 #include <inttypes.h>
+#include <limits.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
 
 #include "backend_fapi.h"
 #include "emitter.h"
@@ -106,6 +111,106 @@ static CK_RV get_key(FAPI_CONTEXT *fapictx, tpm_ctx *tctx, const char *path, uin
     twist_free(name);
 
     return CKR_OK;
+}
+
+/*
+ * The value of a string key of the FAPI config, a flat JSON object, as
+ * tss2-fapi reads it; a value with escapes is not looked for.
+ */
+static bool fapi_config_value(const char *json, const char *key, char *out, size_t len) {
+
+    char quoted[64];
+    snprintf(quoted, sizeof(quoted), "\"%s\"", key);
+
+    const char *p = strstr(json, quoted);
+    if (!p) {
+        return false;
+    }
+    p += strlen(quoted);
+    while (isspace((unsigned char)*p)) {
+        p++;
+    }
+    if (*p++ != ':') {
+        return false;
+    }
+    while (isspace((unsigned char)*p)) {
+        p++;
+    }
+    if (*p++ != '"') {
+        return false;
+    }
+    const char *end = strchr(p, '"');
+    if (!end || (size_t)(end - p) >= len) {
+        return false;
+    }
+    memcpy(out, p, end - p);
+    out[end - p] = '\0';
+    return true;
+}
+
+/*
+ * Whether the keystore of the FAPI config has a storage root key, which
+ * tss2_provision makes: one without has no tokens, and asking tss2-fapi
+ * about it only makes it log errors (issue #655).
+ */
+static bool fapi_keystore_provisioned(const char *dir, const char *profile) {
+
+    char path[PATH_MAX];
+    const char *rest = dir;
+    const char *home = "";
+
+    if (dir[0] == '~') {
+        home = getenv("HOME");
+        if (!home || !home[0]) {
+            return false;
+        }
+        rest = dir + 1;
+    }
+
+    int n = snprintf(path, sizeof(path), "%s%s/%s/HS/SRK", home, rest, profile);
+    if (n < 0 || (size_t)n >= sizeof(path)) {
+        return false;
+    }
+
+    struct stat sb;
+    return !stat(path, &sb) && S_ISDIR(sb.st_mode);
+}
+
+bool backend_fapi_is_provisioned(void) {
+
+    const char *conf = getenv("TSS2_FAPICONF");
+    if (!conf) {
+        conf = FAPI_CONFIG_DEFAULT;
+    }
+
+    FILE *f = fopen(conf, "r");
+    if (!f) {
+        LOGV("No FAPI config at \"%s\"", conf);
+        return false;
+    }
+
+    char json[8192];
+    size_t got = fread(json, 1, sizeof(json) - 1, f);
+    fclose(f);
+    json[got] = '\0';
+
+    char profile[256];
+    if (!fapi_config_value(json, "profile_name", profile, sizeof(profile))) {
+        return false;
+    }
+
+    char dir[PATH_MAX];
+    if (fapi_config_value(json, "system_dir", dir, sizeof(dir))
+            && fapi_keystore_provisioned(dir, profile)) {
+        return true;
+    }
+    if (fapi_config_value(json, "user_dir", dir, sizeof(dir))
+            && fapi_keystore_provisioned(dir, profile)) {
+        return true;
+    }
+
+    LOGV("FAPI is not provisioned");
+    return false;
 }
 
 CK_RV backend_fapi_init(void) {
@@ -974,6 +1079,11 @@ out:
     return rv;
 }
 #else
+
+bool backend_fapi_is_provisioned(void) {
+
+	return false;
+}
 
 CK_RV backend_fapi_init(void) {
 

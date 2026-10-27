@@ -13,6 +13,14 @@ __attribute__((weak))
 CK_RV backend_fapi_init(void);
 CK_RV backend_fapi_destroy(void);
 
+/**
+ * Whether FAPI has been provisioned, found without calling tss2-fapi.
+ * @return
+ *  true if the system or the user keystore of the FAPI config holds a
+ *  storage root key.
+ */
+bool backend_fapi_is_provisioned(void);
+
 CK_RV backend_fapi_ctx_new(token *t);
 void backend_fapi_ctx_free(token *t);
 

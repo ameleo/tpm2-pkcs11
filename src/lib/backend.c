@@ -54,7 +54,14 @@ CK_RV backend_init(void) {
     const char *env = getenv("TPM2_PKCS11_BACKEND");
     bool esysdb_only = env && !strcasecmp(env, "esysdb");
 
-    CK_RV rv = esysdb_only ? CKR_FUNCTION_NOT_SUPPORTED : backend_fapi_init();
+    /*
+     * Nor is it when nothing asks for it and it was never provisioned: it
+     * would hold no token, and tss2-fapi would log errors (issue #655).
+     */
+    bool fapi_unused = esysdb_only
+            || (backend != backend_fapi && !backend_fapi_is_provisioned());
+
+    CK_RV rv = fapi_unused ? CKR_FUNCTION_NOT_SUPPORTED : backend_fapi_init();
     if (rv) {
         static const char *msg = "FAPI backend was not initialized.";
         if (backend == backend_fapi) {

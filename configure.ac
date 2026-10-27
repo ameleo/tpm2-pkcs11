@@ -138,6 +138,14 @@ AS_IF([test "$have_fapi" = "1"],
 )
 AM_CONDITIONAL([HAVE_FAPI], [test "$have_fapi" = "1"])
 
+AC_ARG_WITH(
+  [fapi-config],
+  [AS_HELP_STRING([--with-fapi-config=FILE],
+    [the FAPI config tss2-fapi reads when TSS2_FAPICONF is not set, to find whether FAPI is provisioned. Default is /etc/tpm2-tss/fapi-config.json])],
+    [fapi_config=$withval],
+    [fapi_config=/etc/tpm2-tss/fapi-config.json])
+AC_DEFINE_UNQUOTED([FAPI_CONFIG_DEFAULT], ["$fapi_config"], [The FAPI config tss2-fapi reads by default])
+
 # START ENABLE UNIT
 #
 # Enable --with-unit option for unit testing
