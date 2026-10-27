@@ -255,7 +255,31 @@ void token_config_free(token_config *c) {
     }
 
     free(c->tcti);
+    free(c->serial);
     memset(c, 0, sizeof(*c));
+}
+
+CK_RV token_config_new_serial(token_config *c) {
+
+    /*
+     * Random, never derived from the TPM: the endorsement key and the like
+     * name the machine for good, and every application can read a serial.
+     */
+    twist hex = utils_get_rand_hex_str(8);
+    if (!hex) {
+        return CKR_GENERAL_ERROR;
+    }
+
+    char *serial = strdup(hex);
+    twist_free(hex);
+    if (!serial) {
+        LOGE("oom");
+        return CKR_HOST_MEMORY;
+    }
+
+    free(c->serial);
+    c->serial = serial;
+    return CKR_OK;
 }
 
 void token_free(token *t) {
@@ -323,7 +347,14 @@ CK_RV token_get_info (token *t, CK_TOKEN_INFO *info) {
 
     // Identification
     str_padded_copy(info->label, t->label);
-    str_padded_copy(info->serialNumber, TPM2_TOKEN_SERIAL_NUMBER);
+    if (t->config.serial) {
+        /* a pointer, which str_padded_copy() would take for 8 bytes */
+        _str_padded_copy(info->serialNumber, sizeof(info->serialNumber),
+                (const CK_UTF8CHAR_PTR)t->config.serial,
+                strnlen(t->config.serial, sizeof(info->serialNumber)));
+    } else {
+        str_padded_copy(info->serialNumber, TPM2_TOKEN_SERIAL_NUMBER);
+    }
 
 
     // Memory: TODO not sure what memory values should go here, the platform?

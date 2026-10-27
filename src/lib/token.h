@@ -23,6 +23,7 @@ struct token_config {
     char *tcti;           /* token specific tcti config */
     pss_config_state pss_sigs_good;
     bool empty_user_pin;  /* user PIN of the token is empty */
+    char *serial;         /* serial number, random, made with the token */
 };
 
 typedef struct session_table session_table;
@@ -229,6 +230,15 @@ CK_RV token_load_object(token *tok, CK_OBJECT_HANDLE key, tobject **loaded_tobj)
  *   Others like: CKR_GENERAL_ERROR and CKR_HOST_MEMORY
  */
 CK_RV token_unseal_empty_user_pin(token *tok);
+
+/**
+ * Gives a token config a new random serial number, of 16 hex digits.
+ * @param c
+ *  The token config.
+ * @return
+ *   CKR_OK on success, CKR_HOST_MEMORY or CKR_GENERAL_ERROR otherwise.
+ */
+CK_RV token_config_new_serial(token_config *c);
 
 CK_RV token_min_init(token *t);
 void token_reset(token *t);

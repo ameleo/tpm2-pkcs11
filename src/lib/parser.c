@@ -439,6 +439,12 @@ bool handle_token_config_event(yaml_event_t *e,
             } else if(!strcmp(state->key, "empty-user-pin")) {
                 config->empty_user_pin = !strcmp((const char *)e->data.scalar.value, "true")
                         ? true : false;
+            } else if(!strcmp(state->key, "serial")) {
+                config->serial = strdup((const char *)e->data.scalar.value);
+                if (!config->serial) {
+                    LOGE("oom");
+                    return false;
+                }
             } else {
                 LOGE("Unknown key, got: \"%s\"\n",
                         state->key);

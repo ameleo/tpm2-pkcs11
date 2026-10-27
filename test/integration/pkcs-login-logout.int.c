@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
+#include <ctype.h>
 
 #include "tpm.h"
 #include "test.h"
@@ -790,7 +791,17 @@ static void test_init_token_empty_user_pin(void **state) {
     rv = C_CloseSession(session);
     assert_int_equal(rv, CKR_OK);
 
-    /* the empty PIN must survive a new load of the store */
+    /* a new token has a serial number of its own */
+    CK_TOKEN_INFO before = { 0 };
+    rv = C_GetTokenInfo (slot, &before);
+    assert_int_equal(rv, CKR_OK);
+    assert_memory_not_equal(before.serialNumber, "0000000000000000", 16);
+    CK_ULONG k;
+    for (k = 0; k < sizeof(before.serialNumber); k++) {
+        assert_true(isxdigit(before.serialNumber[k]));
+    }
+
+    /* the empty PIN and the serial number must survive a new load of the store */
     rv = C_Finalize(NULL);
     assert_int_equal(rv, CKR_OK);
 
@@ -812,6 +823,8 @@ static void test_init_token_empty_user_pin(void **state) {
 
         if (!memcmp(info.label, label, sizeof(info.label))) {
             assert_false(info.flags & CKF_LOGIN_REQUIRED);
+            assert_memory_equal(info.serialNumber, before.serialNumber,
+                    sizeof(info.serialNumber));
             found = true;
             slot = slots[i];
             break;

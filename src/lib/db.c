@@ -650,6 +650,25 @@ CK_RV db_get_tokens(token *tok, size_t *len) {
     *len = cnt;
     sqlite3_finalize(stmt);
 
+    /* tokens made before serial numbers existed get one now */
+    size_t i;
+    for (i = 0; i < cnt; i++) {
+        token *t = &tok[i];
+        if (!t->config.is_initialized || t->config.serial) {
+            continue;
+        }
+        CK_RV rv = token_config_new_serial(&t->config);
+        if (rv != CKR_OK) {
+            LOGW("Could not make a serial number for token %u", t->id);
+            continue;
+        }
+        rv = db_update_token_config(t);
+        if (rv != CKR_OK) {
+            /* a store we may not write to: the serial lasts as long as we do */
+            LOGV("Could not save the serial number of token %u", t->id);
+        }
+    }
+
     return CKR_OK;
 
 error:

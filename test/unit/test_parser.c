@@ -270,6 +270,29 @@ static void test_token_config_parser_missing_tags(void **state) {
     assert_false(res);
 }
 
+static void test_token_config_parser_serial(void **state) {
+    (void) state;
+
+    token_config conf = {0};
+
+    const char *yaml_config =
+        "---\n"
+        "!!map {\n"
+            "? !!str \"serial\"\n"
+            ": !!str \"0123456789012345\",\n"
+            "? !!str \"token-init\"\n"
+            ": !!bool \"true\",\n"
+        "}\n";
+
+    bool res = parse_token_config_from_string((const unsigned char *)yaml_config,
+            strlen(yaml_config),
+            &conf);
+    assert_true(res);
+    assert_true(conf.is_initialized);
+    assert_string_equal(conf.serial, "0123456789012345");
+    free(conf.serial);
+}
+
 int main(int argc, char* argv[]) {
     (void) argc;
     (void) argv;
@@ -280,6 +303,7 @@ int main(int argc, char* argv[]) {
         cmocka_unit_test(test_config_parser_good),
         cmocka_unit_test(test_token_config_parser_no_tags),
         cmocka_unit_test(test_token_config_parser_missing_tags),
+        cmocka_unit_test(test_token_config_parser_serial),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

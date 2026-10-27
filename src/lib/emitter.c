@@ -328,6 +328,26 @@ WEAK char *emit_config_to_string(token *t) {
         }
     }
 
+    /* add config value serial number, if set */
+    if (t->config.serial) {
+        key = yaml_document_add_scalar(&doc, (yaml_char_t *)YAML_STR_TAG,
+             (yaml_char_t *)"serial", -1, YAML_ANY_SCALAR_STYLE);
+        if (!key) {
+            LOGE("yaml_document_add_scalar for key failed");
+            goto doc_delete;
+        }
+
+        int node = yaml_document_add_scalar(&doc, (yaml_char_t *)YAML_STR_TAG,
+             (yaml_char_t *)t->config.serial, -1, YAML_ANY_SCALAR_STYLE);
+
+        rc = yaml_document_append_mapping_pair(&doc,
+                root, key, node);
+        if (!rc) {
+            LOGE("yaml_document_append_mapping_pair failed");
+            goto doc_delete;
+        }
+    }
+
     /* add config value empty user PIN, if set */
     if (t->config.empty_user_pin) {
         key = yaml_document_add_scalar(&doc, (yaml_char_t *)YAML_STR_TAG,

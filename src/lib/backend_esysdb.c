@@ -136,6 +136,13 @@ CK_RV backend_esysdb_create_token_seal(token *t, const twist hexwrappingkey,
     /* TODO get TCTI config from ENV var and use throughout this process */
     t->config.is_initialized = true;
 
+    if (!t->config.serial) {
+        rv = token_config_new_serial(&t->config);
+        if (rv != CKR_OK) {
+            goto error;
+        }
+    }
+
     rv = db_add_token(t);
     if (rv != CKR_OK) {
         /* do not take ownership on failure */

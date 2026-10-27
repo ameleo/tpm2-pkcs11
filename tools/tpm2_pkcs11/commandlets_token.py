@@ -2,6 +2,7 @@
 # python stdlib dependencies
 import binascii
 import io
+import secrets
 import sys
 
 # External dependencies
@@ -265,9 +266,12 @@ class AddTokenCommand(Command):
             pss_sig_good = check_pss_signature(tpm2, pobj_handle, pobject['objauth'])
 
             # If this succeeds, we update the token table
+            # The serial number is random: never derived from the TPM, whose
+            # identity would then reach every application
             config = {
                 'token-init': True,
-                'pss-sigs-good' : pss_sig_good
+                'pss-sigs-good' : pss_sig_good,
+                'serial': secrets.token_hex(8)
             }
             if userpin == '':
                 config['empty-user-pin'] = True
