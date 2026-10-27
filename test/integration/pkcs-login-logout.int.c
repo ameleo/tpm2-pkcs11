@@ -865,6 +865,18 @@ static void test_init_token_empty_user_pin(void **state) {
     assert_int_equal(rv, CKR_OK);
     assert_int_equal(siglen, 256);
 
+    /* and so is an object, a certificate saved beside its key for instance */
+    CK_OBJECT_CLASS data_class = CKO_DATA;
+    CK_BYTE value[] = "value";
+    CK_ATTRIBUTE dtempl[] = {
+        { CKA_CLASS, &data_class, sizeof(data_class) },
+        { CKA_TOKEN, &ck_true, sizeof(ck_true) },
+        { CKA_VALUE, value, sizeof(value) - 1 },
+    };
+    CK_OBJECT_HANDLE hdata;
+    rv = C_CreateObject(session, dtempl, ARRAY_LEN(dtempl), &hdata);
+    assert_int_equal(rv, CKR_OK);
+
     rv = C_CloseSession(session);
     assert_int_equal(rv, CKR_OK);
 }

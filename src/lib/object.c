@@ -1141,12 +1141,22 @@ CK_RV object_create(session_ctx *ctx, CK_ATTRIBUTE *templ, CK_ULONG count, CK_OB
     LOGV("state: %lu", state);
 
     /*
-     * Currently we only support RW user session state objects.
+     * Currently we only support RW user session state objects, or a RW
+     * public session of a token whose user PIN is empty.
      */
+    token *tok = session_ctx_get_token(ctx);
     switch(state) {
     case CKS_RW_USER_FUNCTIONS:
         break;
     case CKS_RW_PUBLIC_SESSION:
+        if (tok && tok->config.empty_user_pin) {
+            rv = token_unseal_empty_user_pin(tok);
+            if (rv != CKR_OK) {
+                return rv;
+            }
+            break;
+        }
+        return CKR_USER_NOT_LOGGED_IN;
     case CKS_RW_SO_FUNCTIONS:
         return CKR_USER_NOT_LOGGED_IN;
     default:
@@ -1203,7 +1213,6 @@ CK_RV object_create(session_ctx *ctx, CK_ATTRIBUTE *templ, CK_ULONG count, CK_OB
         }
     }
 
-    token *tok = session_ctx_get_token(ctx);
     assert(tok);
     attr_list *new_attrs = NULL;
 
