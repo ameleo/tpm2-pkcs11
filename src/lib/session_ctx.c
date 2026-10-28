@@ -239,7 +239,15 @@ CK_RV session_ctx_login(session_ctx *ctx, CK_USER_TYPE user, CK_BYTE_PTR pin, CK
         }
     }
 
-    twist tpin = twistbin_new(pin, pinlen);
+    /*
+     * No protected authentication path: a PIN of length 0 is the empty PIN,
+     * whatever its pointer, as applications such as strongSwan pass it as a
+     * NULL pointer.
+     */
+    if (!pin && pinlen) {
+        return CKR_ARGUMENTS_BAD;
+    }
+    twist tpin = twistbin_new(pin ? pin : (CK_BYTE_PTR) "", pinlen);
     if (!tpin) {
         return CKR_HOST_MEMORY;
     }

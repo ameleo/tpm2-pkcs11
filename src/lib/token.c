@@ -480,11 +480,19 @@ void token_unlock(token *t) {
 CK_RV token_setpin(token *tok, CK_UTF8CHAR_PTR oldpin, CK_ULONG oldlen, CK_UTF8CHAR_PTR newpin, CK_ULONG newlen) {
 
     /*
-     * The token has no protected authentication path, so a PIN is always
-     * passed in, an empty one as a buffer of length 0 (PKCS#11, C_SetPIN).
+     * The token has no protected authentication path: a PIN of length 0 is
+     * the empty PIN, whatever its pointer, as applications such as strongSwan
+     * pass it as a NULL pointer.
      */
-    check_pointer(oldpin);
-    check_pointer(newpin);
+    if ((!oldpin && oldlen) || (!newpin && newlen)) {
+        return CKR_ARGUMENTS_BAD;
+    }
+    if (!oldpin) {
+        oldpin = (CK_UTF8CHAR_PTR) "";
+    }
+    if (!newpin) {
+        newpin = (CK_UTF8CHAR_PTR) "";
+    }
 
     CK_RV rv = CKR_GENERAL_ERROR;
 
@@ -542,10 +550,15 @@ out:
 CK_RV token_initpin(token *tok, CK_UTF8CHAR_PTR newpin, CK_ULONG newlen) {
 
     /*
-     * A NULL PIN asks for the protected authentication path, which the token
-     * does not have (PKCS#11, C_InitPIN): an empty PIN is a buffer of length 0.
+     * The token has no protected authentication path: a PIN of length 0 is
+     * the empty PIN, whatever its pointer.
      */
-    check_pointer(newpin);
+    if (!newpin && newlen) {
+        return CKR_ARGUMENTS_BAD;
+    }
+    if (!newpin) {
+        newpin = (CK_UTF8CHAR_PTR) "";
+    }
 
     CK_RV rv = CKR_GENERAL_ERROR;
 

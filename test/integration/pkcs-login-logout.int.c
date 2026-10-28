@@ -777,12 +777,18 @@ static void test_init_token_empty_user_pin(void **state) {
     rv = C_Login(session, CKU_SO, sopin, sizeof(sopin) - 1);
     assert_int_equal(rv, CKR_OK);
 
-    /* no protected authentication path: a NULL PIN is not an empty one */
-    rv = C_InitPIN(session, NULL, 0);
+    /* no protected authentication path: a NULL PIN of length 0 is the empty PIN */
+    rv = C_InitPIN(session, NULL, 1);
     assert_int_equal(rv, CKR_ARGUMENTS_BAD);
 
-    CK_UTF8CHAR empty[1] = { 0 };
-    rv = C_InitPIN(session, empty, 0);
+    rv = C_InitPIN(session, NULL, 0);
+    assert_int_equal(rv, CKR_OK);
+
+    rv = C_Logout(session);
+    assert_int_equal(rv, CKR_OK);
+
+    /* a user login with the empty PIN given as NULL, as strongSwan does */
+    rv = C_Login(session, CKU_USER, NULL, 0);
     assert_int_equal(rv, CKR_OK);
 
     rv = C_Logout(session);
