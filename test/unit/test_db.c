@@ -2969,10 +2969,9 @@ static void test_db_take_lock(void **state) {
     assert_int_equal(unlink(lock_path), 0);
     unsetenv("PKCS11_SQL_LOCK");
 
-    unlink(db_path);
-    char unset_lock[PATH_MAX];
-    snprintf(unset_lock, sizeof(unset_lock), "%s.lock", db_path);
-    unlink(unset_lock);
+    /* the lock file beside the db, if the first steps left it */
+    assert_int_equal(get_lock_path(db_path, lock_path), SQLITE_OK);
+    UNUSED(unlink(lock_path));
     assert_int_equal(rmdir(tmp_dir), 0);
 }
 
