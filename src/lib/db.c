@@ -2538,40 +2538,67 @@ DEBUG_VISIBILITY int get_lock_path(const char *path, char *lockpath) {
     return SQLITE_OK;
 }
 
-DEBUG_VISIBILITY FILE *take_lock(const char *path, char *lockpath) {
+DEBUG_VISIBILITY CK_RV take_lock(const char *path, char *lockpath, int *fd) {
+
+    *fd = -1;
 
     if (get_lock_path(path, lockpath) != SQLITE_OK) {
-        return NULL;
+        return CKR_GENERAL_ERROR;
     }
 
-    FILE *f = fopen(lockpath, "w+");
-    if (!f) {
+    /*
+     * The lock file is never unlinked: a process could otherwise lock the
+     * inode of a file just unlinked while another one locks a new file of
+     * the same name, and both would hold "the" lock.
+     *
+     * Nothing is ever written to it, and flock(2) works on a descriptor
+     * open for reading, so it is open read only: a process which may only
+     * read the store can lock it once it exists. It is made with the mode
+     * sqlite3 gives the db (0644 less the umask), so that whoever may read
+     * the db may lock it.
+     */
+    int f = open(lockpath, O_RDONLY | O_CREAT | O_CLOEXEC,
+            S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    if (f < 0 && (errno == EACCES || errno == EPERM || errno == EROFS)) {
+        /* it may exist, but not be ours to create */
+        f = open(lockpath, O_RDONLY | O_CLOEXEC);
+        if (f < 0 && errno == ENOENT) {
+            /*
+             * No lock file, and none may be made here: the store is only
+             * read by this process, see db_setup().
+             */
+            LOGV("No lock file \"%s\" and none may be made, going on without",
+                    lockpath);
+            return CKR_OK;
+        }
+    }
+
+    if (f < 0) {
         LOGE("Could not open lock file \"%s\", error: %s",
                 lockpath, strerror(errno));
-        return NULL;
+        return CKR_GENERAL_ERROR;
     }
 
-    int rc = flock(fileno(f), LOCK_EX);
+    int rc = flock(f, LOCK_EX);
     if (rc < 0) {
         LOGE("Could not flock file \"%s\", error: %s",
                 lockpath, strerror(errno));
-        fclose(f);
-        unlink(lockpath);
-        return NULL;
+        close(f);
+        return CKR_GENERAL_ERROR;
     }
 
-    return f;
+    *fd = f;
+    return CKR_OK;
 }
 
-static void release_lock(FILE *f, char *lockpath) {
+DEBUG_VISIBILITY void release_lock(int fd, const char *lockpath) {
 
-    int rc = flock(fileno(f), LOCK_UN);
+    int rc = flock(fd, LOCK_UN);
     if (rc < 0) {
         LOGE("Could not unlock file \"%s\", error: %s",
                 lockpath, strerror(errno));
     }
-    UNUSED(unlink(lockpath));
-    UNUSED(fclose(f));
+    UNUSED(close(fd));
 }
 
 #ifndef NDBEBUG
@@ -2672,11 +2699,11 @@ static CK_RV db_setup(sqlite3 **xdb, const char *dbpath) {
     bool is_in_mem_db = !pname || pname[0] == '\0';
 
     char lockpath[PATH_MAX];
-    FILE *f = NULL;
+    int fd = -1;
     if (!is_in_mem_db) {
-        f = take_lock(dbpath, lockpath);
-        if (!f) {
-            return CKR_GENERAL_ERROR;
+        CK_RV rv = take_lock(dbpath, lockpath, &fd);
+        if (rv != CKR_OK) {
+            return rv;
         }
     }
 
@@ -2689,11 +2716,6 @@ static CK_RV db_setup(sqlite3 **xdb, const char *dbpath) {
     rv = db_get_version(*xdb, &old_version);
     if (rv != CKR_OK) {
         LOGE("Could not get DB version");
-        goto out;
-    }
-
-    if (old_version == DB_EMPTY) {
-        rv = db_init_new(*xdb);
         goto out;
     }
 
@@ -2710,6 +2732,24 @@ static CK_RV db_setup(sqlite3 **xdb, const char *dbpath) {
         goto out;
     }
 
+    /*
+     * Without the lock, the store is only read: a process which may not
+     * make a file beside the db could not upgrade it anyway, as that
+     * makes a backup there.
+     */
+    if (!is_in_mem_db && fd < 0) {
+        LOGE("DB at \"%s\" needs %s, which needs the lock file \"%s\"",
+                dbpath, old_version == DB_EMPTY ? "initializing" : "an upgrade",
+                lockpath);
+        rv = CKR_GENERAL_ERROR;
+        goto out;
+    }
+
+    if (old_version == DB_EMPTY) {
+        rv = db_init_new(*xdb);
+        goto out;
+    }
+
     rv = db_update(xdb, dbpath, old_version, DB_VERSION);
 
 out:
@@ -2718,9 +2758,8 @@ out:
             "https://github.com/tpm2-software/tpm2-pkcs11/blob/master/docs/DB_UPGRADE.md.");
     }
 
-    if (!is_in_mem_db) {
-        assert(f);
-        release_lock(f, lockpath);
+    if (fd >= 0) {
+        release_lock(fd, lockpath);
     }
     return rv;
 }

@@ -11,6 +11,11 @@
 #include <string.h>
 #include <setjmp.h>
 
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+
 #include <cmocka.h>
 
 #include <sqlite3.h>
@@ -2890,6 +2895,87 @@ static void test_db_get_lock_path(void **state) {
     unsetenv("PKCS11_SQL_LOCK");
 }
 
+static void test_db_take_lock(void **state) {
+    UNUSED(state);
+
+    char tmp_key[] = "/tmp/pkcs11_test_db_take_lock_XXXXXX";
+    char *tmp_dir = mkdtemp(tmp_key);
+    assert_non_null(tmp_dir);
+
+    char db_path[PATH_MAX];
+    snprintf(db_path, sizeof(db_path), "%s/tpm2_pkcs11.sqlite3", tmp_dir);
+    char lock_path[PATH_MAX];
+
+    unsetenv("PKCS11_SQL_LOCK");
+
+    /* the lock file is made, and held by the descriptor */
+    int fd = -1;
+    assert_int_equal(take_lock(db_path, lock_path, &fd), CKR_OK);
+    assert_true(fd >= 0);
+
+    int other = open(lock_path, O_RDONLY | O_CLOEXEC);
+    assert_true(other >= 0);
+    assert_int_equal(flock(other, LOCK_EX | LOCK_NB), -1);
+    assert_int_equal(errno, EWOULDBLOCK);
+
+    /* released, it stays */
+    release_lock(fd, lock_path);
+    struct stat sb;
+    assert_int_equal(stat(lock_path, &sb), 0);
+    assert_int_equal(flock(other, LOCK_EX | LOCK_NB), 0);
+    assert_int_equal(flock(other, LOCK_UN), 0);
+    close(other);
+
+    /* taken again on the same file */
+    ino_t ino = sb.st_ino;
+    assert_int_equal(take_lock(db_path, lock_path, &fd), CKR_OK);
+    assert_true(fd >= 0);
+    release_lock(fd, lock_path);
+    assert_int_equal(stat(lock_path, &sb), 0);
+    assert_int_equal(sb.st_ino, ino);
+
+    /* DAC does not hold root back, the rest only stands for other users */
+    if (geteuid() != 0) {
+        /* a directory and a lock file which may only be read */
+        assert_int_equal(chmod(lock_path, 0444), 0);
+        assert_int_equal(chmod(tmp_dir, 0555), 0);
+        assert_int_equal(take_lock(db_path, lock_path, &fd), CKR_OK);
+        assert_true(fd >= 0);
+        release_lock(fd, lock_path);
+
+        /* no lock file, and none may be made */
+        assert_int_equal(chmod(tmp_dir, 0755), 0);
+        assert_int_equal(unlink(lock_path), 0);
+        assert_int_equal(chmod(tmp_dir, 0555), 0);
+        assert_int_equal(take_lock(db_path, lock_path, &fd), CKR_OK);
+        assert_int_equal(fd, -1);
+        assert_int_equal(chmod(tmp_dir, 0755), 0);
+    }
+
+    /* a lock directory which does not exist is an error */
+    char lock_dir[PATH_MAX];
+    snprintf(lock_dir, sizeof(lock_dir), "%s/nonexistent", tmp_dir);
+    setenv("PKCS11_SQL_LOCK", lock_dir, 1);
+    assert_int_equal(take_lock(db_path, lock_path, &fd), CKR_GENERAL_ERROR);
+    assert_int_equal(fd, -1);
+
+    /* the lock directory is used when set */
+    snprintf(lock_dir, sizeof(lock_dir), "%s", tmp_dir);
+    setenv("PKCS11_SQL_LOCK", lock_dir, 1);
+    assert_int_equal(take_lock(db_path, lock_path, &fd), CKR_OK);
+    assert_true(fd >= 0);
+    assert_true(strncmp(lock_path, tmp_dir, strlen(tmp_dir)) == 0);
+    release_lock(fd, lock_path);
+    assert_int_equal(unlink(lock_path), 0);
+    unsetenv("PKCS11_SQL_LOCK");
+
+    unlink(db_path);
+    char unset_lock[PATH_MAX];
+    snprintf(unset_lock, sizeof(unset_lock), "%s.lock", db_path);
+    unlink(unset_lock);
+    assert_int_equal(rmdir(tmp_dir), 0);
+}
+
 int main(int argc, char* argv[]) {
     (void) argc;
     (void) argv;
@@ -3004,6 +3090,7 @@ int main(int argc, char* argv[]) {
         cmocka_unit_test(test_db_add_token_sqlite3_bind_blob_2_fail),
         cmocka_unit_test(test_db_add_token_sqlite3_step_2_fail),
         cmocka_unit_test(test_db_get_lock_path),
+        cmocka_unit_test(test_db_take_lock),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

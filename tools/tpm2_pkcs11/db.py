@@ -764,17 +764,18 @@ class Db(object):
 
     def _create(self):
 
-        # create a lock from the db name plush .lock suffix
+        # create a lock from the db name plush .lock suffix, the one the
+        # library takes. It is never unlinked: a process could otherwise lock
+        # the file just unlinked while another one locks a new one, and both
+        # would hold the lock.
         lockpath = self._path+".lock"
         holds_lock = False
-        fd = os.open(lockpath, os.O_CREAT|os.O_RDWR)
+        fd = os.open(lockpath, os.O_CREAT|os.O_RDONLY, 0o644)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
             holds_lock = True
             self._do_create()
         finally:
-            # we always want unlink to occur
-            os.unlink(lockpath)
             if holds_lock:
                 fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)

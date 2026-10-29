@@ -93,7 +93,8 @@ int __real_init_pobject(unsigned pid, pobject *pobj, tpm_ctx *tpm);
 int init_sealobjects(unsigned tokid, sealobject *sealobj);
 int __real_init_sealobjects(unsigned tokid, sealobject *sealobj);
 int get_lock_path(const char *path, char *lockpath);
-FILE *take_lock(const char *path, char *lockpath);
+CK_RV take_lock(const char *path, char *lockpath, int *fd);
+void release_lock(int fd, const char *lockpath);
 #endif
 
 #endif /* SRC_PKCS11_LIB_DB_H_ */

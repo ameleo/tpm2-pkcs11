@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <setjmp.h>
 
 #include <cmocka.h>
@@ -23,7 +24,7 @@ typedef struct test_state test_state;
 struct test_state {
     char *random_string;
     char *tmp_dir;
-    FILE *file;
+    int fd;
 };
 
 static inline test_state *test_state_cast(void **state) {
@@ -36,8 +37,8 @@ static void test_state_free(test_state **test) {
         test_state *t = *test;
         free(t->tmp_dir);
         free(t->random_string);
-        if (t->file) {
-            fclose(t->file);
+        if (t->fd >= 0) {
+            close(t->fd);
         }
         free(t);
         *test = NULL;
@@ -69,6 +70,7 @@ static test_state *test_state_new(const uint8_t *data, size_t len) {
 
     t->random_string = null_term_data;
     t->tmp_dir = tmp_dir;
+    t->fd = -1;
 
     return t;
 }
@@ -97,7 +99,7 @@ static void test(void **state) {
     setenv("PKCS11_SQL_LOCK", t->random_string, true);
 
     char lockpath[PATH_MAX];
-    t->file = take_lock(t->tmp_dir, lockpath);
+    UNUSED(take_lock(t->tmp_dir, lockpath, &t->fd));
 }
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
